@@ -1,0 +1,4 @@
+# 运行时生成的生词本，不入库
+vocab.tsv
+__pycache__/
+*.pyc

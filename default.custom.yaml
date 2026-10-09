@@ -1,0 +1,18 @@
+# default.custom.yaml  ——  给所有方案追加“英文译词”filter
+#
+# 放在 %AppData%\Rime\default.custom.yaml（用户根）。
+# 重新部署（小狼毫菜单 » 重新部署）后生效。
+#
+# engine/filters/+ 表示在现有 filter 列表末尾追加，不会覆盖方案自带的 filter。
+# 若某方案（如 rime-ice）完全自定义了 engine/filters，本补丁可能不生效，
+# 那就改写 <方案id>.custom.yaml，把同一份 patch 写进去。
+
+patch:
+  engine/filters/+:
+    - lua_filter@en_glossary
+  # —— 可选开关（不写就用默认值）——
+  en_glossary/enabled: true        # 设 false 临时关掉译词
+  en_glossary/separator: ' ｜ '    # 原注释与译词之间的分隔
+  en_glossary/with_pos: true       # true: “v. develop”；false: “develop”
+  # en_glossary/data_path: ''      # 释义表绝对路径，留空自动查找
+  # en_glossary/vocab_path: ''     # 生词本绝对路径，留空用 用户根/vocab.tsv
