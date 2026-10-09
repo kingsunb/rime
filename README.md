@@ -80,6 +80,7 @@ patch:
 | `en_glossary/enabled` | `true` | 设 `false` 临时关掉 |
 | `en_glossary/separator` | `' ｜ '` | 原注释与译词的分隔 |
 | `en_glossary/with_pos` | `true` | `true` 显示 `v. develop`；`false` 只显示 `develop` |
+| `en_glossary/record_vocab` | `true` | `false` 只显示译词、不记生词本（最省开销） |
 | `en_glossary/data_path` | 自动 | 释义表绝对路径 |
 | `en_glossary/vocab_path` | 自动 | 生词本绝对路径 |
 
@@ -105,3 +106,21 @@ patch:
   “上屏过”计数可另由 RIME 自带用户词典补全（RIME 已记录每个上屏词的频次）。
 - 释义表 23.2 万条，首次激活输入法时加载一次（约零点几秒），之后常驻内存。
 - 仅在装了 librime-lua 的小狼毫上有效。
+
+## 打字延迟排查
+
+如果装上后打字变卡，按下面顺序排查（改完都要**重新部署**）：
+
+1. **先判定是不是生词本拖慢的**：在 `default.custom.yaml` 的 `patch` 下加
+   `en_glossary/record_vocab: false`，重新部署。
+   - 不卡了 → 是生词本记录的开销，保持 `false` 即可（只显示译词）。
+   - 还卡 → 是译词显示本身，继续往下看。
+2. **首次按键的短暂卡顿是正常的**：23.2 万条释义表只在 Lua VM 生命周期内
+   加载一次（首次按键 / 切方案后第一键），约零点几秒，之后常驻内存不再重读。
+   若**每次**激活都卡很久，多半是 Lua 状态被反复重建，检查是否装了多份
+   `librime-lua` 或方案冲突。
+3. **rime-ice 等自带完整 `engine/filters` 的方案**：`default.custom.yaml`
+   的追加进不去，要改写 `rime_ice.custom.yaml`（见上文“用雾凞拼音？必看”），
+   否则 filter 根本没生效（表现为没译词，而不是卡）。
+4. 仍卡且机器较老：可把 `en_glossary.tsv` 裁小（只留常用词），减少内存与
+   加载时间；哈希查找本身是 O(1)，表大小不影响逐键速度，只影响一次性加载。

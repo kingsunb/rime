@@ -12,8 +12,14 @@
 --   en_glossary/enabled: true        # 关掉就设 false
 --   en_glossary/separator: ' ｜ '    # 译词与原注释之间的分隔
 --   en_glossary/with_pos: true       # 译词带词性（v. develop）；false 则只显示 develop
+--   en_glossary/record_vocab: true   # false 关掉生词本记录（只显示译词，最省开销）
 --   en_glossary/data_path: ''        # 释义表绝对路径，留空则自动查找
 --   en_glossary/vocab_path: ''       # 生词本绝对路径，留空则用 用户根/vocab.tsv
+--
+-- 性能要点（相对原版）：
+--   1. 直接 cand.comment = ... 赋值，不再 cand:get_genuine() 克隆候选（逐键省掉大量分配）。
+--   2. 曝光去重：同一词 DEDUP_SEC 秒内只记一次，避免逐键重复计数 + 减少 I/O。
+--   3. 释义表加载后立即 collectgarbage("collect")，收掉建表临时串，减少后续 GC 抖动。
 
 local vocab = require("en_vocab")
 
@@ -22,8 +28,11 @@ local M = {}
 -- 模块级缓存：整个 Lua VM 生命周期只加载一次（切方案不重读）
 local glossary = nil     -- 中文 -> 英文串（含词性）
 local book = nil         -- 生词本
-local cfg = nil          -- {enabled, separator, with_pos}
+local cfg = nil          -- {enabled, separator, with_pos, record_vocab}
 local inited = false
+-- 曝光去重表：zh -> 上次记录的 os.time()；同一词 DEDUP_SEC 秒内只记一次
+local recent = {}
+local DEDUP_SEC = 60
 
 -- 捕获本脚本路径（用于定位数据文件）
 local _script_src = debug.getinfo(1, "S").source
@@ -119,6 +128,7 @@ function M.init(env)
     enabled = cfg_bool(env, "en_glossary/enabled", true),
     separator = cfg_str(env, "en_glossary/separator", " ｜ "),
     with_pos = cfg_bool(env, "en_glossary/with_pos", true),
+    record_vocab = cfg_bool(env, "en_glossary/record_vocab", true),
   }
   if not cfg.enabled then return end
 
@@ -129,16 +139,21 @@ function M.init(env)
   end
   if data_path then
     glossary = load_glossary(data_path)
+    -- 释义表很大（23 万条）。建表期间产生大量临时串，加载完立刻做一次
+    -- 完整 GC 回收掉，避免后续逐键增量 GC 扫这张大表时周期性掉帧。
+    if collectgarbage then collectgarbage("collect") end
   end
 
-  -- 生词本路径：配置 > 用户根/vocab.tsv
-  local vocab_path = cfg_str(env, "en_glossary/vocab_path", "")
-  if vocab_path == "" then
-    local d = writable_dir()
-    if d then vocab_path = d .. "/vocab.tsv" end
-  end
-  if vocab_path then
-    book = vocab.open(vocab_path)
+  -- 生词本：record_vocab 关掉就不开（只显示译词，最省开销）
+  if cfg.record_vocab then
+    local vocab_path = cfg_str(env, "en_glossary/vocab_path", "")
+    if vocab_path == "" then
+      local d = writable_dir()
+      if d then vocab_path = d .. "/vocab.tsv" end
+    end
+    if vocab_path then
+      book = vocab.open(vocab_path)
+    end
   end
 end
 
@@ -160,6 +175,9 @@ function M.func(input, env)
 
   local sep = cfg.separator
   local with_pos = cfg.with_pos
+  local do_record = book ~= nil
+  -- 每键取一次时间，供曝光去重 + 落盘节流复用，避免每个候选都调 os.time
+  local now_t = do_record and os.time() or nil
   for cand in input:iter() do
     local zh = cand.text
     local en = zh and glossary[zh] or nil
@@ -168,15 +186,20 @@ function M.func(input, env)
         en = strip_pos(en)
       end
       if en ~= "" then
-        local existing = cand.comment or ""
-        local genuine = cand:get_genuine()
-        if existing ~= "" then
-          genuine.comment = existing .. sep .. en
+        local existing = cand.comment
+        -- 直接改 comment，不再 cand:get_genuine() 克隆候选（逐键省掉一次对象分配）
+        if existing and existing ~= "" then
+          cand.comment = existing .. sep .. en
         else
-          genuine.comment = en
+          cand.comment = en
         end
-        if book then
-          vocab.record_exposure(book, zh, en)
+        if do_record then
+          -- 去重：同一词 60 秒内只记一次曝光，避免逐键重复计数 + 减少 I/O
+          local last = recent[zh]
+          if not last or now_t - last >= DEDUP_SEC then
+            recent[zh] = now_t
+            vocab.record_exposure(book, zh, en, now_t)
+          end
         end
       end
     end

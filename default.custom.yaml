@@ -14,5 +14,6 @@ patch:
   en_glossary/enabled: true        # 设 false 临时关掉译词
   en_glossary/separator: ' ｜ '    # 原注释与译词之间的分隔
   en_glossary/with_pos: true       # true: “v. develop”；false: “develop”
+  en_glossary/record_vocab: true   # false 只显示译词、不记生词本（最省开销，延迟大可先关它排查）
   # en_glossary/data_path: ''      # 释义表绝对路径，留空自动查找
   # en_glossary/vocab_path: ''     # 生词本绝对路径，留空用 用户根/vocab.tsv

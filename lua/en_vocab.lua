@@ -10,6 +10,9 @@
 --
 -- 落盘策略：按时间节流，默认每 30 秒至多写一次，避免每次按键都写盘；
 -- fini 时再强制写一次。崩溃最多丢 30 秒的曝光，对学习日志可接受。
+--
+-- 注：曝光去重（同一词 60 秒内只记一次）由 en_glossary.lua 负责，
+-- 本模块只管“收到一次记录就 +1 并按节流落盘”。
 
 local M = {}
 
@@ -71,7 +74,8 @@ function M.open(path)
 end
 
 -- 记一次曝光（候选被看到）。
-function M.record_exposure(book, zh, en)
+-- now_t 可选：调用方已取好的 os.time()，传入复用，避免每个候选都调 os.time。
+function M.record_exposure(book, zh, en, now_t)
   if not book or zh == nil or zh == "" or en == nil or en == "" then
     return
   end
@@ -87,10 +91,10 @@ function M.record_exposure(book, zh, en)
   end
   book.dirty = true
   -- 时间节流落盘
-  local t = now()
-  if not book.last_flush or t - book.last_flush >= FLUSH_INTERVAL then
+  now_t = now_t or now()
+  if not book.last_flush or now_t - book.last_flush >= FLUSH_INTERVAL then
     M.save(book)
-    book.last_flush = t
+    book.last_flush = now_t
   end
 end
 
