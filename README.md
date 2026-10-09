@@ -44,6 +44,25 @@
 
 > 路径速查：`%AppData%\Rime` 可由小狼毫菜单 » **用户文件夹** 直接打开。
 
+### 用雾凇拼音（rime-ice）？必看
+
+rime-ice 的方案文件自带一份**完整的 `engine/filters` 列表**，所以 `default.custom.yaml`
+里追加的 filter 进不到它里面——表现为打字没译词。改在 `%AppData%\Rime\rime_ice.custom.yaml`：
+
+```yaml
+patch:
+  engine/filters/+:
+    - lua_filter@en_glossary
+  en_glossary/separator: ' ｜ '
+  en_glossary/with_pos: true
+```
+
+已有 `rime_ice.custom.yaml` 就把 `engine/filters/+` 两行并到现有 `patch:` 下（`patch:` 只留一个）。
+重新部署后打 `kaifa`，「开发」旁应出现 `｜ v. develop`。
+
+> 仍不显示，多半是 filter 找不到释义表：在 `patch` 下加
+> `en_glossary/data_path: 'C:\Users\<你>\AppData\Roaming\Rime\en_glossary.tsv'`（写死真实路径）再部署。
+
 ## 使用
 
 - 正常打字即可。候选旁会多一条 `｜ v. develop` 这样的译词。
