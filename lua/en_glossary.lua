@@ -18,8 +18,10 @@
 --
 -- 性能要点（相对原版）：
 --   1. 直接 cand.comment = ... 赋值，不再 cand:get_genuine() 克隆候选（逐键省掉大量分配）。
---   2. 曝光去重：同一词 DEDUP_SEC 秒内只记一次，避免逐键重复计数 + 减少 I/O。
+--   2. 曝光去重：同一词 DEDUP_SEC 秒内只记一次，避免逐键重复计数；去重表封顶防无限增长。
 --   3. 释义表加载后立即 collectgarbage("collect")，收掉建表临时串，减少后续 GC 抖动。
+--   4. 生词本落盘移出候选热路径：record_exposure 只改内存，maybe_flush 在每键“开始时”
+--      按节流触发，绝不挡在 yield(cand) 前——消除“生词本越大、打字越卡”的同步写盘延迟。
 
 local vocab = require("en_vocab")
 
@@ -32,6 +34,8 @@ local cfg = nil          -- {enabled, separator, with_pos, record_vocab}
 local inited = false
 -- 曝光去重表：zh -> 上次记录的 os.time()；同一词 DEDUP_SEC 秒内只记一次
 local recent = {}
+local recent_n = 0
+local RECENT_CAP = 8192        -- 去重表封顶，防止超长会话无限增长；超了清空，最多多记一次曝光
 local DEDUP_SEC = 60
 
 -- 捕获本脚本路径（用于定位数据文件）
@@ -178,6 +182,10 @@ function M.func(input, env)
   local do_record = book ~= nil
   -- 每键取一次时间，供曝光去重 + 落盘节流复用，避免每个候选都调 os.time
   local now_t = do_record and os.time() or nil
+  -- 落盘节流：在候选循环“之前”做，绝不在循环里做，避免同步写盘卡住当前键的候选产出
+  if do_record then
+    vocab.maybe_flush(book, now_t)
+  end
   for cand in input:iter() do
     local zh = cand.text
     local en = zh and glossary[zh] or nil
@@ -198,6 +206,14 @@ function M.func(input, env)
           local last = recent[zh]
           if not last or now_t - last >= DEDUP_SEC then
             recent[zh] = now_t
+            recent_n = recent_n + 1
+            -- 去重表封顶：超长会话下 unique 词可能很多，清空重来，最多多记一次曝光
+            if recent_n > RECENT_CAP then
+              recent = {}
+              recent_n = 1
+              recent[zh] = now_t
+            end
+            -- record_exposure 只改内存，不做 I/O；落盘由每键开始的 maybe_flush 负责
             vocab.record_exposure(book, zh, en, now_t)
           end
         end

@@ -11,8 +11,12 @@
 -- 落盘策略：按时间节流，默认每 30 秒至多写一次，避免每次按键都写盘；
 -- fini 时再强制写一次。崩溃最多丢 30 秒的曝光，对学习日志可接受。
 --
+-- 重要：record_exposure 只改内存、不做任何 I/O；落盘由 maybe_flush 在每键
+-- 处理“开始时”（候选循环之前）按节流触发，绝不挡在 yield(cand) 前面，
+-- 否则同步写盘会卡住当前键的候选产出（生词本越大卡得越久）。
+--
 -- 注：曝光去重（同一词 60 秒内只记一次）由 en_glossary.lua 负责，
--- 本模块只管“收到一次记录就 +1 并按节流落盘”。
+-- 本模块只管“收到一次记录就 +1”。
 
 local M = {}
 
@@ -49,7 +53,10 @@ function M.open(path)
     path = path,
     entries = {},      -- 中文 -> {en, seen, committed, used, first, last}
     dirty = false,
-    last_flush = nil,
+    -- 初始化为当前时间：首次曝光不会因 last_flush=nil 立即触发全量重写，
+    -- 而是攒满一个 FLUSH_INTERVAL 再写，避免“每次激活输入法后第一个生词
+    -- 就卡一下”。
+    last_flush = now(),
   }
   local f = io.open(path, "r")
   if f then
@@ -90,7 +97,13 @@ function M.record_exposure(book, zh, en, now_t)
       { en = en, seen = 1, committed = 0, used = 0, first = d, last = d }
   end
   book.dirty = true
-  -- 时间节流落盘
+  -- 落盘不在热路径里做（会卡住候选产出）；改由 maybe_flush 在每键开始时按节流触发
+end
+
+-- 按时间节流落盘：在每键处理开始时（候选循环之前）调用。
+-- 绝不在 record_exposure / 候选循环里调用，避免 I/O 卡住当前键。
+function M.maybe_flush(book, now_t)
+  if not book or not book.dirty then return end
   now_t = now_t or now()
   if not book.last_flush or now_t - book.last_flush >= FLUSH_INTERVAL then
     M.save(book)
